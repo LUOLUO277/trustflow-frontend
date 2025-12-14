@@ -71,6 +71,8 @@ export default defineConfig([
   },
 ])
 ```
+
+```
 src/
 ├── assets/             # 静态资源
 ├── components/         # 公共组件
@@ -97,3 +99,4 @@ src/
 │   └── format.ts       # 格式化工具
 ├── App.tsx             # 路由配置入口
 └── main.tsx
+```
