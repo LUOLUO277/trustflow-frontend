@@ -71,3 +71,29 @@ export default defineConfig([
   },
 ])
 ```
+src/
+├── assets/             # 静态资源
+├── components/         # 公共组件
+│   ├── common/         # 通用组件 (Button, Input 等)
+│   ├── layout/         # 布局组件 (Sidebar, Header - FE-1负责)
+│   └── business/       # 业务组件 (如 ChatBubble, FileUploader)
+├── hooks/              # 自定义 Hooks (useWeb3, useStream)
+├── pages/              # 页面级组件
+│   ├── auth/           # 登录页 (FE-1)
+│   ├── chat/           # 创作端/对话页 (FE-1)
+│   ├── knowledge/      # 知识库管理 (FE-2)
+│   ├── verify/         # 验证终端 (FE-2)
+│   └── dashboard/      # 落地页/仪表盘 (FE-2)
+├── services/           # API 接口管理 (根据后端模块拆分)
+│   ├── api.ts          # Axios 实例与拦截器 (FE-1)
+│   ├── authService.ts  # 认证相关接口
+│   ├── chatService.ts  # 对话相关接口
+│   └── kbService.ts    # 知识库相关接口
+├── store/              # 全局状态管理 (Zustand)
+│   ├── useAuthStore.ts # 用户与Token状态
+│   └── useAppStore.ts  # 全局UI状态
+├── utils/              # 工具函数
+│   ├── web3.ts         # 钱包连接工具
+│   └── format.ts       # 格式化工具
+├── App.tsx             # 路由配置入口
+└── main.tsx
