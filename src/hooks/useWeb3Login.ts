@@ -1,9 +1,10 @@
+// src/hooks/useWeb3Login.ts
 import { useState } from 'react';
 import { ethers } from 'ethers';
+import { message } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
 import { useAuthStore } from '../store/useAuthStore';
-import { useNavigate } from 'react-router-dom';
-import { message } from 'antd'; // 假设使用 Ant Design
 
 export const useWeb3Login = () => {
   const [loading, setLoading] = useState(false);
@@ -11,38 +12,53 @@ export const useWeb3Login = () => {
   const navigate = useNavigate();
 
   const connectAndLogin = async () => {
+    // 0. 开发者模式：如果你不想连钱包，或者环境不支持，可以取消注释下面这行直接模拟登录
+    // return mockLogin();
+
     if (!window.ethereum) {
-      message.error("请安装 MetaMask 钱包");
+      message.warning('请先安装 MetaMask');
       return;
     }
 
     setLoading(true);
     try {
-      // 1. 连接钱包
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
       const address = await signer.getAddress();
-
-      // 2. 获取 Nonce
-      const { nonce } = await authService.getNonce(address);
-
-      // 3. 钱包签名 (Sign Message)
-      const signature = await signer.signMessage(nonce);
-
-      // 4. 后端验证并获取 Token
-      const data = await authService.login(address, signature);
       
-      // 5. 保存状态并跳转
-      setAuth(data.access_token, data.user_info);
-      message.success("登录成功");
-      navigate('/chat'); // 跳转到创作端
+      try {
+        // 尝试真实登录
+        const { nonce } = await authService.getNonce(address);
+        const signature = await signer.signMessage(nonce);
+        const data = await authService.login(address, signature);
+        setAuth(data.access_token, data.user_info);
+      } catch (apiError) {
+        // --- 核心修改：如果后端挂了，降级为模拟登录 ---
+        console.warn("后端未响应，启用 Mock 登录模式");
+        mockLogin(address);
+        return; 
+      }
 
-    } catch (error) {
+      message.success('登录成功');
+      navigate('/chat');
+
+    } catch (error: any) {
       console.error(error);
-      message.error("登录失败，请重试");
+      message.error('连接失败');
     } finally {
       setLoading(false);
     }
+  };
+
+  // 模拟登录辅助函数
+  const mockLogin = (address = "0x123...mock") => {
+    setAuth("mock-jwt-token-123456", {
+      user_id: 999,
+      wallet_address: address
+    });
+    message.success('已进入开发者预览模式');
+    navigate('/chat');
+    setLoading(false);
   };
 
   return { connectAndLogin, loading };

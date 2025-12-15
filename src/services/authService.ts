@@ -1,10 +1,12 @@
+// src/services/authService.ts
 import api from './api';
 
-export interface NonceResponse {
+// 定义请求和响应类型
+interface NonceResponse {
   nonce: string;
 }
 
-export interface LoginResponse {
+interface LoginResponse {
   access_token: string;
   token_type: string;
   user_info: {
@@ -14,13 +16,20 @@ export interface LoginResponse {
 }
 
 export const authService = {
-  // 1.1 获取 Nonce
-  getNonce: (wallet_address: string) => {
-    return api.post<any, NonceResponse>('/auth/nonce', { wallet_address });
+  // 1.1 获取登录 Nonce
+  // URL: /auth/nonce, Method: POST
+  getNonce: async (walletAddress: string) => {
+    return api.post<any, NonceResponse>('/auth/nonce', {
+      wallet_address: walletAddress // 严格对应 API 文档的 key
+    });
   },
-  
-  // 1.2 签名登录
-  login: (wallet_address: string, signature: string) => {
-    return api.post<any, LoginResponse>('/auth/login', { wallet_address, signature });
+
+  // 1.2 钱包登录
+  // URL: /auth/login, Method: POST
+  login: async (walletAddress: string, signature: string) => {
+    return api.post<any, LoginResponse>('/auth/login', {
+      wallet_address: walletAddress, // 严格对应 API 文档的 key
+      signature: signature
+    });
   }
 };

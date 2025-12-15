@@ -1,34 +1,37 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import MainLayout from './components/layout/MainLayout';
+import React from 'react';
 import LoginPage from './pages/auth/LoginPage';
-import ChatPage from './pages/chat/ChatPage'; // FE-1
-import KnowledgePage from './pages/knowledge/KnowledgePage'; // FE-2
-import VerifyPage from './pages/verify/VerifyPage'; // FE-2
-import DashboardPage from './pages/dashboard/DashboardPage'; // FE-2
+import ChatPage from './pages/chat/ChatPage'; // 1. 引入你刚才写的真页面
 import { useAuthStore } from './store/useAuthStore';
 
-// 路由守卫组件
-const PrivateRoute = ({ children }: { children: JSX.Element }) => {
+// 路由守卫：检查是否有 Token
+const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
   const token = useAuthStore((state) => state.token);
-  return token ? children : <Navigate to="/login" />;
+  // 如果没有 Token，重定向回登录页
+  return token ? <>{children}</> : <Navigate to="/login" replace />;
 };
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* 公开路由 */}
+        {/* 1. 公开路由：登录页 */}
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/verify" element={<VerifyPage />} /> 
 
-        {/* 需要鉴权的路由 (包裹在 Layout 中) */}
-        <Route element={<PrivateRoute><MainLayout /></PrivateRoute>}>
-          <Route path="/" element={<Navigate to="/dashboard" />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/chat/:sessionId" element={<ChatPage />} />
-          <Route path="/knowledge" element={<KnowledgePage />} />
-        </Route>
+        {/* 2. 私有路由：创作端 */}
+        <Route 
+          path="/chat" 
+          element={
+            <PrivateRoute>
+              {/* 2. 这里不再用 ChatPlaceholder，而是用真正的 ChatPage */}
+              <ChatPage />
+            </PrivateRoute>
+          } 
+        />
+        
+        {/* 3. 默认路由 */}
+        <Route path="/" element={<Navigate to="/chat" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   );
