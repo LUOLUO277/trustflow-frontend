@@ -3,7 +3,8 @@ import React from 'react';
 import LoginPage from './pages/auth/LoginPage';
 import ChatPage from './pages/chat/ChatPage'; // 1. 引入你刚才写的真页面
 import { useAuthStore } from './store/useAuthStore';
-
+import KnowledgePage from './pages/knowledge/KnowledgePage';
+import VerificationPage from './pages/verification/VerificationPage';
 // 路由守卫：检查是否有 Token
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
   const token = useAuthStore((state) => state.token);
@@ -17,6 +18,8 @@ function App() {
       <Routes>
         {/* 1. 公开路由：登录页 */}
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/verify" element={<VerificationPage />} />
+        
 
         {/* 2. 私有路由：创作端 */}
         <Route 
@@ -32,6 +35,8 @@ function App() {
         {/* 3. 默认路由 */}
         <Route path="/" element={<Navigate to="/chat" replace />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="/knowledge" element={<KnowledgePage />} />
+        
       </Routes>
     </BrowserRouter>
   );
