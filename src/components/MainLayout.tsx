@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   Layout, 
@@ -6,7 +6,8 @@ import {
   Input, 
   List, 
   Modal, 
-  Typography 
+  Typography,
+  Tag 
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -18,6 +19,7 @@ import {
   LogoutOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../store/useAuthStore';
+import { useChatStore } from '../store/useChatStore'; // 引入 Store
 
 const { Sider } = Layout;
 const { Text } = Typography;
@@ -25,6 +27,7 @@ const { Text } = Typography;
 interface MainLayoutProps {
   children: React.ReactNode;
   onNewChat?: () => void;
+  // sessions 变为可选，内部会优先使用全局 Store
   sessions?: { session_id: number; title: string; last_active: string }[];
   currentSessionId?: number | null;
   onSessionClick?: (id: number) => void;
@@ -34,8 +37,6 @@ interface MainLayoutProps {
 const MainLayout: React.FC<MainLayoutProps> = ({ 
   children, 
   onNewChat,
-  sessions = [],
-  currentSessionId,
   onSessionClick,
   onOpenSettings,
 }) => {
@@ -43,10 +44,26 @@ const MainLayout: React.FC<MainLayoutProps> = ({
   const location = useLocation();
   const { user, logout } = useAuthStore();
   
+  // --- 接入全局状态 ---
+  const { 
+    sessions: globalSessions, 
+    fetchSessions, 
+    currentSessionId: globalSessionId, 
+    setCurrentSessionId 
+  } = useChatStore();
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [searchText, setSearchText] = useState('');
 
-  const filteredSessions = sessions.filter(session => 
+  // 挂载时拉取一次真实数据
+  useEffect(() => {
+    fetchSessions();
+  }, []);
+
+  const isKnowledgePage = location.pathname === '/knowledge';
+
+  // 搜索过滤：优先使用全局数据
+  const filteredSessions = globalSessions.filter(session => 
     session.title.toLowerCase().includes(searchText.toLowerCase())
   );
 
@@ -68,7 +85,16 @@ const MainLayout: React.FC<MainLayoutProps> = ({
     });
   };
 
-  const isKnowledgePage = location.pathname === '/knowledge';
+  // 统一处理会话点击：如果是知识库页面，点击会话需跳转
+  const handleInternalSessionClick = (id: number) => {
+    setCurrentSessionId(id); // 更新全局 ID
+    if (onSessionClick) {
+      onSessionClick(id);
+    }
+    if (isKnowledgePage) {
+      navigate('/chat');
+    }
+  };
 
   const styles = {
     sider: { 
@@ -96,7 +122,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({
 
   return (
     <Layout style={{ height: '100vh', background: '#fff' }}>
-      {/* 侧边栏 */}
       <Sider 
         width={260} 
         style={styles.sider} 
@@ -107,13 +132,13 @@ const MainLayout: React.FC<MainLayoutProps> = ({
         theme="light"
       >
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          {/* 顶部：新建对话 & 搜索 */}
           <div style={{ padding: '16px 16px 0 16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
               <Button 
                 type="text" 
                 icon={<PlusOutlined />} 
                 onClick={() => {
+                  setCurrentSessionId(null); // 清除当前选中
                   if (isKnowledgePage) navigate('/chat');
                   onNewChat?.();
                 }} 
@@ -131,7 +156,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({
               style={{ borderRadius: 8, background: '#ececec' }}
             />
             
-            {/* 知识库入口 */}
             <div 
               style={{ 
                 ...styles.sidebarBtn, 
@@ -147,7 +171,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({
             </div>
           </div>
 
-          {/* 中间：会话列表 */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
             <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', paddingLeft: '8px' }}>
               Recent
@@ -161,13 +184,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({
                     className="hover-bg-gray"
                     style={{
                       ...styles.sidebarBtn,
-                      background: currentSessionId === item.session_id && !isKnowledgePage ? '#e0e0e0' : 'transparent',
-                      fontWeight: currentSessionId === item.session_id && !isKnowledgePage ? 500 : 400,
+                      // 使用全局 globalSessionId 判断高亮
+                      background: globalSessionId === item.session_id && !isKnowledgePage ? '#e0e0e0' : 'transparent',
+                      fontWeight: globalSessionId === item.session_id && !isKnowledgePage ? 500 : 400,
                     }}
-                    onClick={() => {
-                      if (isKnowledgePage) navigate('/chat');
-                      onSessionClick?.(item.session_id);
-                    }}
+                    onClick={() => handleInternalSessionClick(item.session_id)}
                   >
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {item.title}
@@ -178,7 +199,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({
             />
           </div>
 
-          {/* 底部：设置 & 退出 & 用户信息 */}
           <div style={{ padding: '12px', borderTop: '1px solid #e5e5e5' }}>
             <div 
               style={{ ...styles.sidebarBtn, marginBottom: 4 }} 
@@ -233,9 +253,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
         </div>
       </Sider>
 
-      {/* 主内容区 */}
       <Layout style={{ background: '#fff', position: 'relative' }}>
-        {/* 顶部折叠按钮 */}
         <div style={{ 
           height: '50px', 
           display: 'flex', 

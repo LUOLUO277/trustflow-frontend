@@ -13,7 +13,9 @@ import {
   Upload, 
   Popover, 
   Tag,
-  message 
+  message,
+  Radio,
+  Divider
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -23,10 +25,12 @@ import {
   SafetyCertificateOutlined,
   FileOutlined,
   PictureOutlined,
+  CommentOutlined,
+  BgColorsOutlined,
+  SwapOutlined
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-// 引入真实 Service
 import { chatService, type ChatMessage, type SessionItem } from '../../services/chatService';
 import type { UploadFile } from 'antd';
 import MainLayout from '../../components/MainLayout';
@@ -35,11 +39,16 @@ const { Content } = Layout;
 const { TextArea } = Input;
 const { Text } = Typography;
 
+// --- 常量定义 ---
+const TEXT_MODEL_ID = "zai-org/GLM-4.5";
+const IMAGE_MODEL_ID = "black-forest-labs/FLUX.1-schnell";
+const API_BASE_URL = "http://localhost:8080"; // 你的后端地址
+
 const ChatPage: React.FC = () => {
+  // --- 状态管理 ---
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   
-  // 状态初始化为空，等待 API 加载
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   
@@ -48,13 +57,30 @@ const ChatPage: React.FC = () => {
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
-  // 默认模型参数
-  const [model, setModel] = useState('TrustFlow-V1');
+  // --- 模式与参数 ---
+  const [mode, setMode] = useState<'text' | 'image'>('text'); 
   const [temperature, setTemperature] = useState(0.7);
+  const [imageSize, setImageSize] = useState('1024x1024');
+  const [inferenceSteps, setInferenceSteps] = useState(4);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // --- 1. 初始化：加载会话列表 ---
+  // --- 辅助函数：处理图片路径 ---
+  // 将 ".\storage\generated\xxx.png" 转换为 "http://localhost:8080/storage/generated/xxx.png"
+// --- 辅助函数：处理图片路径 ---
+const getImageUrl = (path?: string) => {
+    if (!path) return '';
+    // 如果已经是 http 开头（比如网络图片）则直接返回
+    if (path.startsWith('http')) return path;
+    
+    // 后端返回: .\storage\generated\xxx.png
+    // 本地物理路径: D:\Grade Three\...\storage\generated\xxx.png
+    // 浏览器访问路径: http://localhost:8080/storage/generated/xxx.png
+    
+    // 硬编码替换逻辑：把开头的 "." 替换为你的后端地址，并把反斜杠 "\" 换成正斜杠 "/"
+    return path.replace('.', 'http://localhost:8080').replace(/\\/g, '/');
+  };
+
   const loadSessions = async () => {
     try {
       const data = await chatService.getSessions();
@@ -76,13 +102,21 @@ const ChatPage: React.FC = () => {
     scrollToBottom();
   }, [messages, loading]);
 
-  // --- 2. 切换会话：加载历史记录 ---
+  // --- 切换会话 ---
   const handleSessionClick = async (sessionId: number) => {
     setCurrentSessionId(sessionId);
     setLoading(true);
     try {
       const history = await chatService.getHistory(sessionId);
-      setMessages(history);
+      
+      // 【修复顺序问题】强制按创建时间升序排列 (旧 -> 新)
+      const sortedHistory = [...history].sort((a, b) => {
+        const timeA = new Date(a.created_at || 0).getTime();
+        const timeB = new Date(b.created_at || 0).getTime();
+        return timeA - timeB;
+      });
+
+      setMessages(sortedHistory);
     } catch (error) {
       console.error("加载历史记录失败", error);
       message.error("无法加载历史记录");
@@ -91,26 +125,34 @@ const ChatPage: React.FC = () => {
     }
   };
 
-  // --- 3. 新建会话 ---
   const createNewChat = () => {
     setCurrentSessionId(null);
     setMessages([]);
     setFileList([]);
   };
 
-  // --- 4. 发送消息 (核心逻辑替换) ---
+  // --- 快捷切换模式 ---
+  const toggleMode = () => {
+    const newMode = mode === 'text' ? 'image' : 'text';
+    setMode(newMode);
+    message.info(`已切换到 ${newMode === 'text' ? '文本对话' : 'AI 绘图'} 模式`);
+  };
+
+  // --- 发送消息 ---
   const handleSend = async () => {
     if (!inputText.trim() && fileList.length === 0) return;
     
-    // 构造请求内容
     let content = inputText;
     if (fileList.length > 0) {
       const fileNames = fileList.map(f => f.name).join(', ');
       content = `[附件: ${fileNames}]\n\n${inputText}`;
     }
     
-    // 4.1 乐观更新 UI (立即显示用户消息)
-    const userMsg: ChatMessage = { role: 'user', content };
+    const userMsg: ChatMessage = { 
+        role: 'user', 
+        content,
+        created_at: new Date().toISOString() // 本地临时显示时间
+    };
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
     setFileList([]);
@@ -119,44 +161,50 @@ const ChatPage: React.FC = () => {
     try {
       let activeSessionId = currentSessionId;
 
-      // 4.2 如果当前没有会话 ID，先创建会话
       if (!activeSessionId) {
-        // 使用用户输入的前15个字作为标题，如果为空则由后端处理
-        const title = content.slice(0, 15) || "新会话";
+        const title = content.slice(0, 15) || (mode === 'image' ? "AI 绘图" : "新会话");
         const newSession = await chatService.createSession(title);
         activeSessionId = newSession.session_id;
         setCurrentSessionId(activeSessionId);
-        // 刷新列表以显示新会话
         loadSessions(); 
       }
 
-      // 4.3 调用真实接口发送消息
-      const res = await chatService.sendMessage({
+      const requestBody: any = {
         session_id: activeSessionId!,
-        mode: 'text', // 目前 UI 默认走文本模式，如果需要绘图，需在 UI 增加切换开关
-        model: model,
+        mode: mode, 
         prompt: content,
-        parameters: {
-          temperature: temperature
-        }
-      });
+      };
 
-      // 4.4 接收响应并显示
+      if (mode === 'text') {
+        requestBody.model = TEXT_MODEL_ID;
+        requestBody.parameters = { temperature: temperature };
+      } else {
+        requestBody.model = IMAGE_MODEL_ID;
+        requestBody.parameters = {
+          image_size: imageSize,
+          num_inference_steps: inferenceSteps,
+          batch_size: 1
+        };
+      }
+
+      const res = await chatService.sendMessage(requestBody);
+
       const botMsg: ChatMessage = {
         role: 'assistant',
         content: res.content,
         tx_hash: res.tx_hash,
-        citations: res.citations, // RAG 引用
+        citations: res.citations,
         content_type: res.content_type,
-        artifact_url: res.artifact_url // 如果是图片
+        artifact_url: res.artifact_url,
+        watermark_status: res.watermark_status,
+        created_at: new Date().toISOString()
       };
       
       setMessages(prev => [...prev, botMsg]);
 
     } catch (error) {
       console.error(error);
-      message.error("发送失败，请检查网络或后端服务");
-      // 可选：如果失败，移除刚才用户发送的那条消息，或者显示重试按钮
+      message.error("请求失败，请检查网络或参数");
     } finally {
       setLoading(false);
     }
@@ -181,61 +229,52 @@ const ChatPage: React.FC = () => {
       onSessionClick={handleSessionClick}
       onOpenSettings={() => setIsSettingsOpen(true)}
     >
-      <Content style={{ 
-        position: 'relative', 
-        height: '100%', 
-        display: 'flex', 
-        flexDirection: 'column', 
-        paddingTop: 50 
-      }}>
-        {/* 顶部模型信息 */}
+      <Content style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', paddingTop: 50 }}>
+        
+        {/* --- 顶部状态栏 (简化版) --- */}
         <div style={{ 
-          position: 'absolute',
-          top: 0,
-          left: 50,
-          height: 50,
-          display: 'flex',
-          alignItems: 'center',
-          borderBottom: '1px solid #f0f0f0',
-          right: 0,
-          paddingRight: 16,
+          position: 'absolute', top: 0, left: 50, height: 50, right: 0, paddingRight: 16,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          borderBottom: '1px solid #f0f0f0', background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', zIndex: 1
         }}>
-          <div style={{ 
-            fontWeight: 600, 
-            color: '#444', 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: 8 
-          }}>
-            {model} 
-            <span style={{ fontSize: '12px', color: '#999', fontWeight: 400 }}>
-              T={temperature}
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            
+            {/* 模式切换 (可点击) */}
+            <Tooltip title="点击切换创作模式">
+                <Tag 
+                color={mode === 'text' ? 'blue' : 'purple'} 
+                icon={mode === 'text' ? <CommentOutlined /> : <BgColorsOutlined />}
+                style={{ 
+                    padding: '4px 12px', 
+                    fontSize: 14, 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    cursor: 'pointer',
+                    borderRadius: 16
+                }}
+                onClick={toggleMode}
+                >
+                {mode === 'text' ? 'Text Mode' : 'Image Mode'} <SwapOutlined style={{ marginLeft: 6, fontSize: 12, opacity: 0.7 }} />
+                </Tag>
+            </Tooltip>
+
+            {/* 模型名称 */}
+            <Text strong style={{ color: '#444', fontSize: 14 }}>
+              {mode === 'text' ? 'GLM-4.5' : 'FLUX.1-schnell'}
+            </Text>
           </div>
         </div>
 
-        {/* 聊天内容区域 */}
+        {/* --- 消息列表 --- */}
         {messages.length === 0 ? (
-          <div style={{ 
-            flex: 1, 
-            display: 'flex', 
-            flexDirection: 'column', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            paddingBottom: '100px' 
-          }}>
-            <div style={{ 
-              background: 'linear-gradient(135deg, #10a37f 0%, #1a7f5a 100%)', 
-              padding: 16, 
-              borderRadius: '16px', 
-              marginBottom: 16 
-            }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingBottom: '100px' }}>
+            <div style={{ background: 'linear-gradient(135deg, #10a37f 0%, #1a7f5a 100%)', padding: 16, borderRadius: '16px', marginBottom: 16 }}>
               <SafetyCertificateOutlined style={{ fontSize: 40, color: '#fff' }} />
             </div>
-            <h2 style={{ fontSize: '24px', fontWeight: 600, color: '#000', marginBottom: 8 }}>
-              TrustFlow
-            </h2>
-            <Text type="secondary">可信溯源的 AI 助手，每次对话都上链存证</Text>
+            <h2 style={{ fontSize: '24px', fontWeight: 600, color: '#000', marginBottom: 8 }}>TrustFlow</h2>
+            <Text type="secondary">
+                {mode === 'text' ? '文本哈希存证模式' : '图片隐形水印存证模式'}
+            </Text>
           </div>
         ) : (
           <div style={{ flex: 1, overflowY: 'auto', padding: '0 0 140px 0' }}>
@@ -256,14 +295,20 @@ const ChatPage: React.FC = () => {
                       {msg.role === 'user' ? 'You' : 'TrustFlow'}
                     </div>
                     
-                    {/* 消息内容渲染 (支持文本 Markdown 和 图片) */}
+                    {/* 内容渲染 */}
                     <div className="markdown-body" style={{ fontSize: '15px', lineHeight: '1.7', color: '#333' }}>
+                      {/* 如果是图片模式且有 URL */}
                       {msg.content_type === 'image' && msg.artifact_url ? (
                          <div style={{ marginBottom: 10 }}>
                            <img 
-                             src={msg.artifact_url} 
+                             src={getImageUrl(msg.artifact_url)} 
                              alt="Generated Artifact" 
-                             style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid #eee' }} 
+                             style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid #eee', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                             onError={(e) => {
+                                 // 图片加载失败处理
+                                 e.currentTarget.style.display = 'none';
+                                 message.warning("图片加载失败，请检查后端静态资源配置");
+                             }} 
                            />
                            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>Prompt: {msg.content}</div>
                          </div>
@@ -272,23 +317,20 @@ const ChatPage: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 链上存证展示 */}
+                    {/* 存证信息 */}
                     {msg.tx_hash && (
                       <div style={{ marginTop: 10 }}>
                         <Tooltip title={`区块链交易Hash: ${msg.tx_hash}`}>
                           <Tag icon={<SafetyCertificateOutlined />} color="success" style={{ cursor: 'pointer' }}>
-                            Hash Verified
+                            {msg.content_type === 'image' ? 'Watermark Verified' : 'Hash Verified'}
                           </Tag>
                         </Tooltip>
                         
-                        {/* RAG 引用来源展示 */}
                         {msg.citations && msg.citations.length > 0 && (
                           <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                             {msg.citations.map((cit, cIdx) => (
-                               <Tooltip key={cIdx} title={`来源: ${cit.file_name} (P${cit.page}) - 相似度 ${(cit.score * 100).toFixed(0)}%`}>
-                                 <Tag color="blue" style={{ fontSize: 12 }}>
-                                   {cit.file_name}
-                                 </Tag>
+                               <Tooltip key={cIdx} title={`来源: ${cit.file_name} (P${cit.page})`}>
+                                 <Tag color="blue" style={{ fontSize: 12 }}>{cit.file_name}</Tag>
                                </Tooltip>
                             ))}
                           </div>
@@ -302,7 +344,9 @@ const ChatPage: React.FC = () => {
                 <div style={{ display: 'flex', gap: 16, marginTop: 20 }}>
                   <Avatar size="default" icon={<RobotOutlined />} style={{ backgroundColor: '#e6fffa', color: '#10a37f' }} />
                   <div style={{ color: '#666', display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4 }}>
-                    <span className="loading-dots">正在思考并存证中</span>
+                    <span className="loading-dots">
+                      {mode === 'text' ? '正在思考并上链存证...' : '正在绘图并嵌入隐形水印...'}
+                    </span>
                   </div>
                 </div>
               )}
@@ -313,52 +357,50 @@ const ChatPage: React.FC = () => {
 
         {/* 底部输入框 */}
         <div style={{ 
-          position: 'absolute', 
-          bottom: 0, 
-          left: 0, 
-          right: 0,
-          background: 'linear-gradient(180deg, rgba(255,255,255,0) 0%, #fff 30%)',
-          padding: '20px 0 30px 0',
-          display: 'flex',
-          justifyContent: 'center'
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          background: 'linear-gradient(180deg, rgba(255,255,255,0) 0%, #fff 30%)', padding: '20px 0 30px 0',
+          display: 'flex', justifyContent: 'center'
         }}>
           <div style={{ width: '100%', maxWidth: '768px', padding: '0 20px' }}>
+            {/* 附件预览 */}
             {fileList.length > 0 && (
               <div style={{ marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap', padding: '8px 12px', background: '#fafafa', borderRadius: '12px' }}>
                 {fileList.map((file, index) => (
-                  <Tag key={index} closable onClose={() => setFileList(prev => prev.filter((_, i) => i !== index))} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px' }}>
+                  <Tag key={index} closable onClose={() => setFileList(prev => prev.filter((_, i) => i !== index))} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                     <FileOutlined /> {file.name}
                   </Tag>
                 ))}
               </div>
             )}
+            
             <div style={styles.inputWrapper}>
               <Popover
                 open={attachMenuOpen}
                 onOpenChange={setAttachMenuOpen}
                 trigger="click"
-                placement="topLeft"
                 content={
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160 }}>
-                    <Upload beforeUpload={(file) => { setFileList(prev => [...prev, file as unknown as UploadFile]); setAttachMenuOpen(false); return false; }} showUploadList={false} accept=".pdf,.txt,.doc,.docx">
-                      <Button type="text" icon={<FileOutlined />} style={{ width: '100%', textAlign: 'left', justifyContent: 'flex-start' }}>上传文档</Button>
+                    <Upload beforeUpload={(file) => { setFileList(prev => [...prev, file as unknown as UploadFile]); setAttachMenuOpen(false); return false; }} showUploadList={false} accept=".pdf,.txt">
+                      <Button type="text" icon={<FileOutlined />} style={{ width: '100%', textAlign: 'left' }}>上传文档 (RAG)</Button>
                     </Upload>
                     <Upload beforeUpload={(file) => { setFileList(prev => [...prev, file as unknown as UploadFile]); setAttachMenuOpen(false); return false; }} showUploadList={false} accept="image/*">
-                      <Button type="text" icon={<PictureOutlined />} style={{ width: '100%', textAlign: 'left', justifyContent: 'flex-start' }}>上传图片</Button>
+                      <Button type="text" icon={<PictureOutlined />} style={{ width: '100%', textAlign: 'left' }}>上传图片 (Ref)</Button>
                     </Upload>
                   </div>
                 }
               >
                 <Button type="text" shape="circle" icon={<PlusOutlined style={{ fontSize: '18px', color: '#666' }} />} style={{ marginRight: '4px', marginBottom: '4px' }} />
               </Popover>
+
               <TextArea
                 value={inputText}
                 onChange={e => setInputText(e.target.value)}
-                placeholder="Message TrustFlow..."
+                placeholder={mode === 'text' ? "Message TrustFlow..." : "Describe the image to generate..."}
                 autoSize={{ minRows: 1, maxRows: 8 }}
                 onPressEnter={e => { if (!e.shiftKey) { e.preventDefault(); handleSend(); } }}
                 style={{ boxShadow: 'none', background: 'transparent', border: 'none', padding: '8px 0', fontSize: '16px', resize: 'none', marginBottom: '2px', flex: 1 }}
               />
+
               <Button 
                 type="primary" shape="circle" onClick={handleSend}
                 disabled={(!inputText.trim() && fileList.length === 0) || loading}
@@ -367,36 +409,66 @@ const ChatPage: React.FC = () => {
               />
             </div>
             <div style={{ textAlign: 'center', fontSize: '12px', color: '#999', marginTop: '10px' }}>
-              TrustFlow can make mistakes. Check important info.
+              TrustFlow may produce inaccurate information. Content is verified on-chain.
             </div>
           </div>
         </div>
       </Content>
 
-      {/* Settings Modal */}
+      {/* --- 设置面板 (Settings) --- */}
       <Modal
-        title="模型设置"
+        title="生成设置 (Settings)"
         open={isSettingsOpen}
         onCancel={() => setIsSettingsOpen(false)}
         footer={[<Button key="ok" type="primary" onClick={() => setIsSettingsOpen(false)}>完成</Button>]}
+        centered
       >
         <Form layout="vertical" style={{ marginTop: 20 }}>
-          <Form.Item label="选择模型">
-            <Select value={model} onChange={setModel} options={[
-              { value: 'TrustFlow-V1', label: 'TrustFlow V1 (Base)' },
-              { value: 'GPT-4-Secure', label: 'GPT-4 Secure (Proxy)' },
-              { value: 'Llama-3-RAG', label: 'Llama 3 RAG (Local)' },
-            ]} />
+          
+          <Form.Item label="创作模式 (Mode)">
+             <Radio.Group 
+                value={mode} 
+                onChange={e => setMode(e.target.value)} 
+                buttonStyle="solid"
+                style={{ width: '100%' }}
+             >
+                <Radio.Button value="text" style={{ width: '50%', textAlign: 'center' }}>
+                  <CommentOutlined /> 文本对话 (RAG)
+                </Radio.Button>
+                <Radio.Button value="image" style={{ width: '50%', textAlign: 'center' }}>
+                  <BgColorsOutlined /> AI 绘图 (Flux)
+                </Radio.Button>
+             </Radio.Group>
           </Form.Item>
-          <Form.Item label={`Temperature: ${temperature}`}>
-            <Slider min={0} max={1} step={0.1} value={temperature} onChange={setTemperature} marks={{ 0: '精确', 0.5: '平衡', 1: '创意' }} />
-          </Form.Item>
-          <div style={{ padding: 12, background: '#f6ffed', borderRadius: 8, marginTop: 16 }}>
-            <Text style={{ color: '#52c41a', fontSize: 13 }}>
-              <SafetyCertificateOutlined style={{ marginRight: 8 }} />
-              所有对话内容将自动上链存证，确保可追溯
-            </Text>
-          </div>
+
+          <Divider />
+
+          {mode === 'text' ? (
+             <>
+               <Form.Item label="模型 (Model)">
+                  <Input value={TEXT_MODEL_ID} disabled style={{ color: '#000', background: '#f5f5f5' }} />
+               </Form.Item>
+               <Form.Item label={`随机性 (Temperature): ${temperature}`}>
+                  <Slider min={0} max={1} step={0.1} value={temperature} onChange={setTemperature} />
+               </Form.Item>
+             </>
+          ) : (
+             <>
+               <Form.Item label="模型 (Model)">
+                  <Input value={IMAGE_MODEL_ID} disabled style={{ color: '#000', background: '#f5f5f5' }} />
+               </Form.Item>
+               <Form.Item label="图片尺寸 (Image Size)">
+                  <Select value={imageSize} onChange={setImageSize} options={[
+                     { value: '1024x1024', label: '1024x1024 (1:1 Square)' },
+                     { value: '512x1024', label: '512x1024 (9:16 Portrait)' },
+                     { value: '1024x512', label: '1024x512 (16:9 Landscape)' },
+                  ]} />
+               </Form.Item>
+               <Form.Item label={`推理步数 (Inference Steps): ${inferenceSteps}`}>
+                  <Slider min={1} max={8} step={1} value={inferenceSteps} onChange={setInferenceSteps} />
+               </Form.Item>
+             </>
+          )}
         </Form>
       </Modal>
     </MainLayout>
