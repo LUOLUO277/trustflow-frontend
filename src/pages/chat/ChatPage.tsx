@@ -12,7 +12,8 @@ import {
   Form, 
   Upload, 
   Popover, 
-  Tag 
+  Tag,
+  message 
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -25,7 +26,8 @@ import {
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage, SessionItem } from '../../services/chatService';
+// 引入真实 Service
+import { chatService, type ChatMessage, type SessionItem } from '../../services/chatService';
 import type { UploadFile } from 'antd';
 import MainLayout from '../../components/MainLayout';
 
@@ -33,25 +35,38 @@ const { Content } = Layout;
 const { TextArea } = Input;
 const { Text } = Typography;
 
-const MOCK_SESSIONS: SessionItem[] = [
-  { session_id: 1, title: "TrustFlow 技术原理", last_active: "Today" },
-  { session_id: 2, title: "RAG 溯源测试", last_active: "Yesterday" },
-  { session_id: 3, title: "智能合约安全审计", last_active: "Last Week" },
-  { session_id: 4, title: "Web3 隐私计算方案", last_active: "Last Month" },
-];
-
 const ChatPage: React.FC = () => {
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
-  const [sessions] = useState<SessionItem[]>(MOCK_SESSIONS);
+  
+  // 状态初始化为空，等待 API 加载
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  
+  // 默认模型参数
   const [model, setModel] = useState('TrustFlow-V1');
   const [temperature, setTemperature] = useState(0.7);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // --- 1. 初始化：加载会话列表 ---
+  const loadSessions = async () => {
+    try {
+      const data = await chatService.getSessions();
+      setSessions(data);
+    } catch (error) {
+      console.error("加载会话失败", error);
+    }
+  };
+
+  useEffect(() => {
+    loadSessions();
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -61,46 +76,90 @@ const ChatPage: React.FC = () => {
     scrollToBottom();
   }, [messages, loading]);
 
-  const handleSessionClick = (sessionId: number) => {
+  // --- 2. 切换会话：加载历史记录 ---
+  const handleSessionClick = async (sessionId: number) => {
     setCurrentSessionId(sessionId);
-    setMessages(sessionId === 1 ? [
-      { role: 'user', content: 'TrustFlow 是什么？' },
-      { role: 'assistant', content: 'TrustFlow 是一个基于区块链的可信溯源系统。' }
-    ] : []);
+    setLoading(true);
+    try {
+      const history = await chatService.getHistory(sessionId);
+      setMessages(history);
+    } catch (error) {
+      console.error("加载历史记录失败", error);
+      message.error("无法加载历史记录");
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // --- 3. 新建会话 ---
   const createNewChat = () => {
     setCurrentSessionId(null);
     setMessages([]);
     setFileList([]);
   };
 
+  // --- 4. 发送消息 (核心逻辑替换) ---
   const handleSend = async () => {
     if (!inputText.trim() && fileList.length === 0) return;
     
+    // 构造请求内容
     let content = inputText;
     if (fileList.length > 0) {
       const fileNames = fileList.map(f => f.name).join(', ');
       content = `[附件: ${fileNames}]\n\n${inputText}`;
     }
     
+    // 4.1 乐观更新 UI (立即显示用户消息)
     const userMsg: ChatMessage = { role: 'user', content };
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
     setFileList([]);
     setLoading(true);
 
-    await new Promise(r => setTimeout(r, 1000));
+    try {
+      let activeSessionId = currentSessionId;
 
-    const mockResponse: ChatMessage = {
-      role: 'assistant',
-      content: `这是使用 **${model} (Temp: ${temperature})** 生成的回复。\n\nTrustFlow 已将本次生成记录上链，确保内容不可篡改。`,
-      tx_hash: '0x' + Array.from({length: 64}, () => Math.floor(Math.random() * 16).toString(16)).join('').slice(0, 16) + '...',
-      citations: []
-    };
-    
-    setMessages(prev => [...prev, mockResponse]);
-    setLoading(false);
+      // 4.2 如果当前没有会话 ID，先创建会话
+      if (!activeSessionId) {
+        // 使用用户输入的前15个字作为标题，如果为空则由后端处理
+        const title = content.slice(0, 15) || "新会话";
+        const newSession = await chatService.createSession(title);
+        activeSessionId = newSession.session_id;
+        setCurrentSessionId(activeSessionId);
+        // 刷新列表以显示新会话
+        loadSessions(); 
+      }
+
+      // 4.3 调用真实接口发送消息
+      const res = await chatService.sendMessage({
+        session_id: activeSessionId!,
+        mode: 'text', // 目前 UI 默认走文本模式，如果需要绘图，需在 UI 增加切换开关
+        model: model,
+        prompt: content,
+        parameters: {
+          temperature: temperature
+        }
+      });
+
+      // 4.4 接收响应并显示
+      const botMsg: ChatMessage = {
+        role: 'assistant',
+        content: res.content,
+        tx_hash: res.tx_hash,
+        citations: res.citations, // RAG 引用
+        content_type: res.content_type,
+        artifact_url: res.artifact_url // 如果是图片
+      };
+      
+      setMessages(prev => [...prev, botMsg]);
+
+    } catch (error) {
+      console.error(error);
+      message.error("发送失败，请检查网络或后端服务");
+      // 可选：如果失败，移除刚才用户发送的那条消息，或者显示重试按钮
+    } finally {
+      setLoading(false);
+    }
   };
 
   const styles = {
@@ -196,9 +255,24 @@ const ChatPage: React.FC = () => {
                     <div style={{ fontWeight: 600, marginBottom: 4, color: '#333' }}>
                       {msg.role === 'user' ? 'You' : 'TrustFlow'}
                     </div>
+                    
+                    {/* 消息内容渲染 (支持文本 Markdown 和 图片) */}
                     <div className="markdown-body" style={{ fontSize: '15px', lineHeight: '1.7', color: '#333' }}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      {msg.content_type === 'image' && msg.artifact_url ? (
+                         <div style={{ marginBottom: 10 }}>
+                           <img 
+                             src={msg.artifact_url} 
+                             alt="Generated Artifact" 
+                             style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid #eee' }} 
+                           />
+                           <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>Prompt: {msg.content}</div>
+                         </div>
+                      ) : (
+                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      )}
                     </div>
+
+                    {/* 链上存证展示 */}
                     {msg.tx_hash && (
                       <div style={{ marginTop: 10 }}>
                         <Tooltip title={`区块链交易Hash: ${msg.tx_hash}`}>
@@ -206,6 +280,19 @@ const ChatPage: React.FC = () => {
                             Hash Verified
                           </Tag>
                         </Tooltip>
+                        
+                        {/* RAG 引用来源展示 */}
+                        {msg.citations && msg.citations.length > 0 && (
+                          <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {msg.citations.map((cit, cIdx) => (
+                               <Tooltip key={cIdx} title={`来源: ${cit.file_name} (P${cit.page}) - 相似度 ${(cit.score * 100).toFixed(0)}%`}>
+                                 <Tag color="blue" style={{ fontSize: 12 }}>
+                                   {cit.file_name}
+                                 </Tag>
+                               </Tooltip>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

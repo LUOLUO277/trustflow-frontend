@@ -1,4 +1,3 @@
-// src/hooks/useWeb3Login.ts
 import { useState } from 'react';
 import { ethers } from 'ethers';
 import { message } from 'antd';
@@ -12,53 +11,61 @@ export const useWeb3Login = () => {
   const navigate = useNavigate();
 
   const connectAndLogin = async () => {
-    // 0. 开发者模式：如果你不想连钱包，或者环境不支持，可以取消注释下面这行直接模拟登录
-    // return mockLogin();
-
+    // 1. 环境检测
     if (!window.ethereum) {
-      message.warning('请先安装 MetaMask');
+      message.warning('未检测到 MetaMask，请先安装插件！');
       return;
     }
 
     setLoading(true);
     try {
+      // 2. 连接钱包
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
       const address = await signer.getAddress();
       
-      try {
-        // 尝试真实登录
-        const { nonce } = await authService.getNonce(address);
-        const signature = await signer.signMessage(nonce);
-        const data = await authService.login(address, signature);
-        setAuth(data.access_token, data.user_info);
-      } catch (apiError) {
-        // --- 核心修改：如果后端挂了，降级为模拟登录 ---
-        console.warn("后端未响应，启用 Mock 登录模式");
-        mockLogin(address);
-        return; 
-      }
+      console.log('正在尝试登录地址:', address);
 
-      message.success('登录成功');
+      // 3. 请求后端生成 Nonce (API 1.1)
+      // 注意：这里不再有 Mock 降级，如果后端挂了直接 catch 报错
+      const { nonce } = await authService.getNonce(address);
+      if (!nonce) throw new Error('未能获取有效的签名随机数 (Nonce)');
+
+      // 4. 唤起 MetaMask 进行签名 (Off-chain Signature)
+      // 用户会在这里看到小狐狸弹窗
+      const signature = await signer.signMessage(nonce);
+      console.log('用户签名完成:', signature);
+
+      // 5. 发送签名给后端验证 (API 1.2)
+      const data = await authService.login(address, signature);
+
+      // 6. 验证成功，保存 Token
+      setAuth(data.access_token, data.user_info);
+      message.success('登录验证成功！');
+      
+      // 7. 跳转主页
       navigate('/chat');
 
     } catch (error: any) {
-      console.error(error);
-      message.error('连接失败');
+      console.error('Login Failed:', error);
+      
+      // 细化错误处理
+      if (error.code === 'ACTION_REJECTED') {
+        message.info('您取消了签名操作');
+      } else if (error.response) {
+        // Axios 错误：后端返回了非 200
+        const serverError = error.response.data;
+        if (serverError.error === 'signature_invalid') {
+          message.error('签名验证失败，请确认是本人操作');
+        } else {
+          message.error(`登录失败: ${serverError.detail || '服务器异常'}`);
+        }
+      } else {
+        message.error('网络连接错误，请检查后端服务 (Port 8080)');
+      }
     } finally {
       setLoading(false);
     }
-  };
-
-  // 模拟登录辅助函数
-  const mockLogin = (address = "0x123...mock") => {
-    setAuth("mock-jwt-token-123456", {
-      user_id: 999,
-      wallet_address: address
-    });
-    message.success('已进入开发者预览模式');
-    navigate('/chat');
-    setLoading(false);
   };
 
   return { connectAndLogin, loading };
