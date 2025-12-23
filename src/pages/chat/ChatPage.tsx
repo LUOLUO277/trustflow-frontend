@@ -27,7 +27,8 @@ import {
   PictureOutlined,
   CommentOutlined,
   BgColorsOutlined,
-  SwapOutlined
+  SwapOutlined,
+  LinkOutlined
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -66,19 +67,33 @@ const ChatPage: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // --- 辅助函数：处理图片路径 ---
-  // 将 ".\storage\generated\xxx.png" 转换为 "http://localhost:8080/storage/generated/xxx.png"
-// --- 辅助函数：处理图片路径 ---
-const getImageUrl = (path?: string) => {
+  const getImageUrl = (path?: string) => {
     if (!path) return '';
-    // 如果已经是 http 开头（比如网络图片）则直接返回
     if (path.startsWith('http')) return path;
-    
-    // 后端返回: .\storage\generated\xxx.png
-    // 本地物理路径: D:\Grade Three\...\storage\generated\xxx.png
-    // 浏览器访问路径: http://localhost:8080/storage/generated/xxx.png
-    
-    // 硬编码替换逻辑：把开头的 "." 替换为你的后端地址，并把反斜杠 "\" 换成正斜杠 "/"
-    return path.replace('.', 'http://localhost:8080').replace(/\\/g, '/');
+    return path.replace('.', API_BASE_URL).replace(/\\/g, '/');
+  };
+
+  // --- 辅助函数：点击引用跳转 PDF ---
+  const handleCitationClick = (cit: any) => {
+    // 1. 优先使用后端返回的完整 URL (包含 #page=x)
+    if (cit.url) {
+      const targetUrl = cit.url.startsWith('http') ? cit.url : `${API_BASE_URL}${cit.url}`;
+      window.open(targetUrl, '_blank');
+      return;
+    }
+    // 2. 备用：如果有 download_url
+    if (cit.download_url) {
+        const targetUrl = cit.download_url.startsWith('http') ? cit.download_url : `${API_BASE_URL}${cit.download_url}`;
+        window.open(`${targetUrl}#page=${cit.page || 1}`, '_blank');
+        return;
+    }
+    // 3. 兜底：手动拼接
+    if (cit.doc_id) {
+        const fallbackUrl = `${API_BASE_URL}/api/v1/documents/${cit.doc_id}/preview#page=${cit.page || 1}`;
+        window.open(fallbackUrl, '_blank');
+    } else {
+        message.warning('无法打开该引用文档');
+    }
   };
 
   const loadSessions = async () => {
@@ -109,11 +124,13 @@ const getImageUrl = (path?: string) => {
     try {
       const history = await chatService.getHistory(sessionId);
       
-      // 【修复顺序问题】强制按创建时间升序排列 (旧 -> 新)
+      // 【修复顺序问题】
+      // 确保按 created_at 正序排列 (时间早的在数组前面，渲染时在顶部)
+      // 如果 timestamp 相同，保持原有相对顺序（通常数据库ID顺序）
       const sortedHistory = [...history].sort((a, b) => {
         const timeA = new Date(a.created_at || 0).getTime();
         const timeB = new Date(b.created_at || 0).getTime();
-        return timeA - timeB;
+        return timeA - timeB; 
       });
 
       setMessages(sortedHistory);
@@ -131,7 +148,6 @@ const getImageUrl = (path?: string) => {
     setFileList([]);
   };
 
-  // --- 快捷切换模式 ---
   const toggleMode = () => {
     const newMode = mode === 'text' ? 'image' : 'text';
     setMode(newMode);
@@ -148,10 +164,11 @@ const getImageUrl = (path?: string) => {
       content = `[附件: ${fileNames}]\n\n${inputText}`;
     }
     
+    // 1. 先把用户消息加到列表末尾 (Prev + User) -> 显示在底部
     const userMsg: ChatMessage = { 
         role: 'user', 
         content,
-        created_at: new Date().toISOString() // 本地临时显示时间
+        created_at: new Date().toISOString() 
     };
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
@@ -189,6 +206,7 @@ const getImageUrl = (path?: string) => {
 
       const res = await chatService.sendMessage(requestBody);
 
+      // 2. 再把 AI 消息加到列表末尾 (User + Bot) -> Bot 在 User 下面
       const botMsg: ChatMessage = {
         role: 'assistant',
         content: res.content,
@@ -229,17 +247,19 @@ const getImageUrl = (path?: string) => {
       onSessionClick={handleSessionClick}
       onOpenSettings={() => setIsSettingsOpen(true)}
     >
+      {/* 
+         【关键修复】显式设置 flexDirection: 'column' 
+         确保消息是从上到下排列的：Oldest (Top) -> Newest (Bottom)
+      */}
       <Content style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', paddingTop: 50 }}>
         
-        {/* --- 顶部状态栏 (简化版) --- */}
+        {/* --- 顶部状态栏 --- */}
         <div style={{ 
           position: 'absolute', top: 0, left: 50, height: 50, right: 0, paddingRight: 16,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           borderBottom: '1px solid #f0f0f0', background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', zIndex: 1
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            
-            {/* 模式切换 (可点击) */}
             <Tooltip title="点击切换创作模式">
                 <Tag 
                 color={mode === 'text' ? 'blue' : 'purple'} 
@@ -257,8 +277,6 @@ const getImageUrl = (path?: string) => {
                 {mode === 'text' ? 'Text Mode' : 'Image Mode'} <SwapOutlined style={{ marginLeft: 6, fontSize: 12, opacity: 0.7 }} />
                 </Tag>
             </Tooltip>
-
-            {/* 模型名称 */}
             <Text strong style={{ color: '#444', fontSize: 14 }}>
               {mode === 'text' ? 'GLM-4.5' : 'FLUX.1-schnell'}
             </Text>
@@ -295,9 +313,7 @@ const getImageUrl = (path?: string) => {
                       {msg.role === 'user' ? 'You' : 'TrustFlow'}
                     </div>
                     
-                    {/* 内容渲染 */}
                     <div className="markdown-body" style={{ fontSize: '15px', lineHeight: '1.7', color: '#333' }}>
-                      {/* 如果是图片模式且有 URL */}
                       {msg.content_type === 'image' && msg.artifact_url ? (
                          <div style={{ marginBottom: 10 }}>
                            <img 
@@ -305,9 +321,8 @@ const getImageUrl = (path?: string) => {
                              alt="Generated Artifact" 
                              style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid #eee', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                              onError={(e) => {
-                                 // 图片加载失败处理
                                  e.currentTarget.style.display = 'none';
-                                 message.warning("图片加载失败，请检查后端静态资源配置");
+                                 message.warning("图片加载失败");
                              }} 
                            />
                            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>Prompt: {msg.content}</div>
@@ -317,7 +332,7 @@ const getImageUrl = (path?: string) => {
                       )}
                     </div>
 
-                    {/* 存证信息 */}
+                    {/* 存证信息与引用 */}
                     {msg.tx_hash && (
                       <div style={{ marginTop: 10 }}>
                         <Tooltip title={`区块链交易Hash: ${msg.tx_hash}`}>
@@ -326,11 +341,19 @@ const getImageUrl = (path?: string) => {
                           </Tag>
                         </Tooltip>
                         
+                        {/* 【关键修复】渲染引用并绑定点击事件 */}
                         {msg.citations && msg.citations.length > 0 && (
                           <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                             {msg.citations.map((cit, cIdx) => (
-                               <Tooltip key={cIdx} title={`来源: ${cit.file_name} (P${cit.page})`}>
-                                 <Tag color="blue" style={{ fontSize: 12 }}>{cit.file_name}</Tag>
+                               <Tooltip key={cIdx} title="点击预览原文">
+                                 <Tag 
+                                    color="blue" 
+                                    style={{ fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                                    onClick={() => handleCitationClick(cit)} // 绑定点击事件
+                                 >
+                                    <LinkOutlined style={{marginRight: 4}}/>
+                                    {cit.file_name} (P{cit.page})
+                                 </Tag>
                                </Tooltip>
                             ))}
                           </div>
@@ -340,6 +363,8 @@ const getImageUrl = (path?: string) => {
                   </div>
                 </div>
               ))}
+              
+              {/* Loading 状态 */}
               {loading && (
                 <div style={{ display: 'flex', gap: 16, marginTop: 20 }}>
                   <Avatar size="default" icon={<RobotOutlined />} style={{ backgroundColor: '#e6fffa', color: '#10a37f' }} />
@@ -362,7 +387,6 @@ const getImageUrl = (path?: string) => {
           display: 'flex', justifyContent: 'center'
         }}>
           <div style={{ width: '100%', maxWidth: '768px', padding: '0 20px' }}>
-            {/* 附件预览 */}
             {fileList.length > 0 && (
               <div style={{ marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap', padding: '8px 12px', background: '#fafafa', borderRadius: '12px' }}>
                 {fileList.map((file, index) => (
@@ -408,14 +432,10 @@ const getImageUrl = (path?: string) => {
                 style={{ background: (inputText.trim() || fileList.length > 0) ? '#000' : '#e5e5e5', borderColor: 'transparent', color: '#fff', width: '32px', height: '32px', minWidth: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}
               />
             </div>
-            <div style={{ textAlign: 'center', fontSize: '12px', color: '#999', marginTop: '10px' }}>
-              TrustFlow may produce inaccurate information. Content is verified on-chain.
-            </div>
           </div>
         </div>
       </Content>
 
-      {/* --- 设置面板 (Settings) --- */}
       <Modal
         title="生成设置 (Settings)"
         open={isSettingsOpen}
@@ -424,50 +444,21 @@ const getImageUrl = (path?: string) => {
         centered
       >
         <Form layout="vertical" style={{ marginTop: 20 }}>
-          
           <Form.Item label="创作模式 (Mode)">
-             <Radio.Group 
-                value={mode} 
-                onChange={e => setMode(e.target.value)} 
-                buttonStyle="solid"
-                style={{ width: '100%' }}
-             >
-                <Radio.Button value="text" style={{ width: '50%', textAlign: 'center' }}>
-                  <CommentOutlined /> 文本对话 (RAG)
-                </Radio.Button>
-                <Radio.Button value="image" style={{ width: '50%', textAlign: 'center' }}>
-                  <BgColorsOutlined /> AI 绘图 (Flux)
-                </Radio.Button>
+             <Radio.Group value={mode} onChange={e => setMode(e.target.value)} buttonStyle="solid" style={{ width: '100%' }}>
+                <Radio.Button value="text" style={{ width: '50%', textAlign: 'center' }}>文本对话</Radio.Button>
+                <Radio.Button value="image" style={{ width: '50%', textAlign: 'center' }}>AI 绘图</Radio.Button>
              </Radio.Group>
           </Form.Item>
-
           <Divider />
-
           {mode === 'text' ? (
-             <>
-               <Form.Item label="模型 (Model)">
-                  <Input value={TEXT_MODEL_ID} disabled style={{ color: '#000', background: '#f5f5f5' }} />
-               </Form.Item>
-               <Form.Item label={`随机性 (Temperature): ${temperature}`}>
+             <Form.Item label={`随机性 (Temperature): ${temperature}`}>
                   <Slider min={0} max={1} step={0.1} value={temperature} onChange={setTemperature} />
-               </Form.Item>
-             </>
+             </Form.Item>
           ) : (
-             <>
-               <Form.Item label="模型 (Model)">
-                  <Input value={IMAGE_MODEL_ID} disabled style={{ color: '#000', background: '#f5f5f5' }} />
-               </Form.Item>
-               <Form.Item label="图片尺寸 (Image Size)">
-                  <Select value={imageSize} onChange={setImageSize} options={[
-                     { value: '1024x1024', label: '1024x1024 (1:1 Square)' },
-                     { value: '512x1024', label: '512x1024 (9:16 Portrait)' },
-                     { value: '1024x512', label: '1024x512 (16:9 Landscape)' },
-                  ]} />
-               </Form.Item>
-               <Form.Item label={`推理步数 (Inference Steps): ${inferenceSteps}`}>
+             <Form.Item label={`推理步数: ${inferenceSteps}`}>
                   <Slider min={1} max={8} step={1} value={inferenceSteps} onChange={setInferenceSteps} />
-               </Form.Item>
-             </>
+             </Form.Item>
           )}
         </Form>
       </Modal>
