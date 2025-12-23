@@ -252,7 +252,7 @@ const fetchFiles = async () => {
             <div style={{ paddingTop: 10 }}>
               <Space direction="vertical" style={{ width: '100%' }} size="middle">
                 <div><Text type="secondary">文件名：</Text><Text strong>{detailModal.file.filename}</Text></div>
-                <div><Text type="secondary">文件哈希 (SHA-256)：</Text><br /><Text code>{detailModal.file.hash || '计算中...'}</Text></div>
+                
                 <div><Text type="secondary">区块链交易哈希：</Text><br /><Text code>{detailModal.file.tx_hash || '存证中...'}</Text></div>
                 <div><Text type="secondary">系统状态：</Text>{getStatusTag(detailModal.file.status)}</div>
               </Space>

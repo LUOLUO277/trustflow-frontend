@@ -7,7 +7,6 @@ import {
   Typography, 
   Tooltip, 
   Modal, 
-  Select, 
   Slider, 
   Form, 
   Upload, 
@@ -15,7 +14,7 @@ import {
   Tag,
   message,
   Radio,
-  Divider
+  Divider,
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -28,7 +27,11 @@ import {
   CommentOutlined,
   BgColorsOutlined,
   SwapOutlined,
-  LinkOutlined
+  LinkOutlined,
+  FileTextOutlined, // 新增：文档图标
+  ReadOutlined,     // 新增：阅读图标
+  KeyOutlined,      // 新增：哈希Key图标
+  ReloadOutlined
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -75,19 +78,16 @@ const ChatPage: React.FC = () => {
 
   // --- 辅助函数：点击引用跳转 PDF ---
   const handleCitationClick = (cit: any) => {
-    // 1. 优先使用后端返回的完整 URL (包含 #page=x)
     if (cit.url) {
       const targetUrl = cit.url.startsWith('http') ? cit.url : `${API_BASE_URL}${cit.url}`;
       window.open(targetUrl, '_blank');
       return;
     }
-    // 2. 备用：如果有 download_url
     if (cit.download_url) {
         const targetUrl = cit.download_url.startsWith('http') ? cit.download_url : `${API_BASE_URL}${cit.download_url}`;
         window.open(`${targetUrl}#page=${cit.page || 1}`, '_blank');
         return;
     }
-    // 3. 兜底：手动拼接
     if (cit.doc_id) {
         const fallbackUrl = `${API_BASE_URL}/api/v1/documents/${cit.doc_id}/preview#page=${cit.page || 1}`;
         window.open(fallbackUrl, '_blank');
@@ -123,16 +123,11 @@ const ChatPage: React.FC = () => {
     setLoading(true);
     try {
       const history = await chatService.getHistory(sessionId);
-      
-      // 【修复顺序问题】
-      // 确保按 created_at 正序排列 (时间早的在数组前面，渲染时在顶部)
-      // 如果 timestamp 相同，保持原有相对顺序（通常数据库ID顺序）
       const sortedHistory = [...history].sort((a, b) => {
         const timeA = new Date(a.created_at || 0).getTime();
         const timeB = new Date(b.created_at || 0).getTime();
         return timeA - timeB; 
       });
-
       setMessages(sortedHistory);
     } catch (error) {
       console.error("加载历史记录失败", error);
@@ -154,6 +149,17 @@ const ChatPage: React.FC = () => {
     message.info(`已切换到 ${newMode === 'text' ? '文本对话' : 'AI 绘图'} 模式`);
   };
 
+  // --- 新增：刷新当前会话 ---
+  const handleRefresh = () => {
+    if (currentSessionId) {
+      handleSessionClick(currentSessionId);
+      message.success('会话记录已刷新');
+    } else {
+      loadSessions(); // 如果没有选中会话，刷新左侧列表
+      message.success('会话列表已刷新');
+    }
+  };
+
   // --- 发送消息 ---
   const handleSend = async () => {
     if (!inputText.trim() && fileList.length === 0) return;
@@ -164,7 +170,6 @@ const ChatPage: React.FC = () => {
       content = `[附件: ${fileNames}]\n\n${inputText}`;
     }
     
-    // 1. 先把用户消息加到列表末尾 (Prev + User) -> 显示在底部
     const userMsg: ChatMessage = { 
         role: 'user', 
         content,
@@ -206,7 +211,6 @@ const ChatPage: React.FC = () => {
 
       const res = await chatService.sendMessage(requestBody);
 
-      // 2. 再把 AI 消息加到列表末尾 (User + Bot) -> Bot 在 User 下面
       const botMsg: ChatMessage = {
         role: 'assistant',
         content: res.content,
@@ -247,10 +251,6 @@ const ChatPage: React.FC = () => {
       onSessionClick={handleSessionClick}
       onOpenSettings={() => setIsSettingsOpen(true)}
     >
-      {/* 
-         【关键修复】显式设置 flexDirection: 'column' 
-         确保消息是从上到下排列的：Oldest (Top) -> Newest (Bottom)
-      */}
       <Content style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', paddingTop: 50 }}>
         
         {/* --- 顶部状态栏 --- */}
@@ -280,6 +280,19 @@ const ChatPage: React.FC = () => {
             <Text strong style={{ color: '#444', fontSize: 14 }}>
               {mode === 'text' ? 'GLM-4.5' : 'FLUX.1-schnell'}
             </Text>
+            {/* ▼▼▼▼▼▼ 新增部分开始 ▼▼▼▼▼▼ */}
+            <div style={{ width: 1, height: 16, background: '#e0e0e0', margin: '0 4px' }} /> {/* 分割线 */}
+            
+            <Tooltip title="刷新会话记录">
+              <Button 
+                type="text" 
+                icon={<ReloadOutlined spin={loading} />} // 加载时图标会旋转
+                onClick={handleRefresh}
+                size="small"
+                style={{ color: '#666' }}
+              />
+            </Tooltip>
+            {/* ▲▲▲▲▲▲ 新增部分结束 ▲▲▲▲▲▲ */}
           </div>
         </div>
 
@@ -332,30 +345,124 @@ const ChatPage: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 存证信息与引用 */}
-                    {msg.tx_hash && (
-                      <div style={{ marginTop: 10 }}>
-                        <Tooltip title={`区块链交易Hash: ${msg.tx_hash}`}>
-                          <Tag icon={<SafetyCertificateOutlined />} color="success" style={{ cursor: 'pointer' }}>
-                            {msg.content_type === 'image' ? 'Watermark Verified' : 'Hash Verified'}
-                          </Tag>
-                        </Tooltip>
+                    {/* 存证信息与引用优化区域 */}
+                    {(msg.tx_hash || (msg.citations && msg.citations.length > 0)) && (
+                      <div style={{ marginTop: 12 }}>
+                        {/* 存证 Hash */}
+                        {msg.tx_hash && (
+                            <Tooltip title={`区块链交易Hash: ${msg.tx_hash}`}>
+                            <Tag icon={<SafetyCertificateOutlined />} color="success" style={{ cursor: 'pointer', marginBottom: 8 }}>
+                                {msg.content_type === 'image' ? 'Watermark Verified' : 'Hash Verified'}
+                            </Tag>
+                            </Tooltip>
+                        )}
                         
-                        {/* 【关键修复】渲染引用并绑定点击事件 */}
+                        {/* 引用列表（优化版） */}
                         {msg.citations && msg.citations.length > 0 && (
-                          <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {msg.citations.map((cit, cIdx) => (
-                               <Tooltip key={cIdx} title="点击预览原文">
-                                 <Tag 
-                                    color="blue" 
-                                    style={{ fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-                                    onClick={() => handleCitationClick(cit)} // 绑定点击事件
-                                 >
-                                    <LinkOutlined style={{marginRight: 4}}/>
-                                    {cit.file_name} (P{cit.page})
-                                 </Tag>
-                               </Tooltip>
-                            ))}
+                          <div style={{ 
+                              backgroundColor: '#f8f9fa', 
+                              borderRadius: '12px', 
+                              padding: '12px', 
+                              marginTop: '8px',
+                              border: '1px solid #eef0f2'
+                          }}>
+                            <div style={{ fontSize: '12px', fontWeight: 600, color: '#666', marginBottom: '8px', display: 'flex', alignItems: 'center' }}>
+                                <ReadOutlined style={{ marginRight: 6 }}/> 参考文档 ({msg.citations.length})
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {msg.citations.map((cit, cIdx) => (
+                                    <div 
+                                        key={cIdx} 
+                                        onClick={() => handleCitationClick(cit)}
+                                        style={{
+                                            backgroundColor: '#fff',
+                                            borderRadius: '8px',
+                                            padding: '10px 12px',
+                                            cursor: 'pointer',
+                                            border: '1px solid #e6e6e6',
+                                            transition: 'all 0.2s',
+                                            boxShadow: '0 1px 2px rgba(0,0,0,0.02)'
+                                        }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#10a37f'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(16, 163, 127, 0.1)'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#e6e6e6'; e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.02)'; }}
+                                    >
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                                                <FileTextOutlined style={{ color: '#1677ff', fontSize: 14 }} />
+                                                <Text ellipsis style={{ fontWeight: 500, fontSize: 13, color: '#333', maxWidth: 220 }}>
+                                                    {cit.file_name}
+                                                </Text>
+                                            </div>
+                                            {cit.score && (
+                                                <Tag color="cyan" style={{ margin: 0, fontSize: 10, lineHeight: '16px', border: 'none' }}>
+                                                    Match: {(cit.score * 100).toFixed(0)}%
+                                                </Tag>
+                                            )}
+                                        </div>
+                                        
+                                        {/* 摘要片段 */}
+                                        <div style={{ 
+                                            fontSize: 12, 
+                                            color: '#666', 
+                                            lineHeight: '1.5',
+                                            marginBottom: 8,
+                                            display: '-webkit-box',
+                                            WebkitLineClamp: 2,
+                                            WebkitBoxOrient: 'vertical',
+                                            overflow: 'hidden',
+                                            background: '#fafafa',
+                                            padding: '4px 8px',
+                                            borderRadius: '4px'
+                                        }}>
+                                            {cit.content_snippet || cit.text_snippet || "暂无摘要内容..."}
+                                        </div>
+
+                                        {/* 区块链存证 Hash 信息 (新增) */}
+                                        {(cit.file_hash || cit.chunk_hash) && (
+                                            <div style={{ 
+                                                marginBottom: 8, 
+                                                paddingTop: 8,
+                                                borderTop: '1px dashed #eee',
+                                                fontSize: 10, 
+                                                fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace',
+                                                color: '#888'
+                                            }}>
+                                                {cit.file_hash && (
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                            <KeyOutlined style={{ fontSize: 10 }}/> File Hash:
+                                                        </span>
+                                                        <Tooltip title={cit.file_hash} overlayStyle={{ maxWidth: 400 }}>
+                                                            <span style={{ color: '#aaa', cursor: 'text' }}>
+                                                                {cit.file_hash.substring(0, 8)}...{cit.file_hash.substring(cit.file_hash.length - 6)}
+                                                            </span>
+                                                        </Tooltip>
+                                                    </div>
+                                                )}
+                                                {cit.chunk_hash && (
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                            <SafetyCertificateOutlined style={{ fontSize: 10 }}/> Chunk Hash:
+                                                        </span>
+                                                        <Tooltip title={cit.chunk_hash} overlayStyle={{ maxWidth: 400 }}>
+                                                            <span style={{ color: '#aaa', cursor: 'text' }}>
+                                                                {cit.chunk_hash.substring(0, 8)}...{cit.chunk_hash.substring(cit.chunk_hash.length - 6)}
+                                                            </span>
+                                                        </Tooltip>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#999' }}>
+                                            <span>P.{cit.page || 'N/A'}</span>
+                                            <span style={{ display: 'flex', alignItems: 'center', color: '#10a37f', gap: 2 }}>
+                                                查看详情 <LinkOutlined />
+                                            </span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                           </div>
                         )}
                       </div>

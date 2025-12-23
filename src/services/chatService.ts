@@ -11,12 +11,22 @@ export interface SessionItem {
 }
 
 // 引用来源 (RAG)
+// 修改 src/services/chatService.ts
+
 export interface Citation {
   doc_id: number;
+  chunk_id: number;
   file_name: string;
-  page: number;
+  page: number | null;
   score: number;
   text_snippet: string;
+  url?: string;
+  download_url?: string;
+
+  // --- 请手动添加下面这3行 ---
+  content_snippet?: string; // 解决 content_snippet 报错
+  file_hash?: string;       // 解决 file_hash 报错
+  chunk_hash?: string;      // 解决 chunk_hash 报错
 }
 
 // 消息历史记录
