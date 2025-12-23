@@ -92,8 +92,11 @@ export const chatService = {
     return api.get<any, ChatMessage[]>(`/sessions/${sessionId}/history`);
   },
 
-  // 3.4 发送对话/生成
+ // 3.4 发送对话/生成
   sendMessage: (data: SendMessageRequest) => {
-    return api.post<any, SendMessageResponse>('/chat/completions', data);
+    // 【修改点】：在 data 后面增加了第三个参数，设置 timeout
+    return api.post<any, SendMessageResponse>('/chat/completions', data, {
+      timeout: 300000 // 单位是毫秒，300000 = 5分钟
+    });
   }
 };
