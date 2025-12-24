@@ -1,19 +1,20 @@
 import React, { useState } from 'react';
 import {
   Layout, Card, Tabs, Input, Button, Upload, Typography, Tag, Progress,
-  Collapse, Descriptions, Space, message, Timeline, Empty, Divider, Tooltip
+  Descriptions, message, Timeline, Empty, Divider, Tooltip
 } from 'antd';
 import {
   FileTextOutlined, PictureOutlined, LinkOutlined, SafetyCertificateOutlined,
   CheckCircleOutlined, CloseCircleOutlined, InboxOutlined,
-  ExportOutlined, NodeIndexOutlined, ReadOutlined, KeyOutlined,
-  ClockCircleOutlined, SearchOutlined, ArrowRightOutlined
+  ReadOutlined, KeyOutlined,
+  ClockCircleOutlined, SearchOutlined, ArrowRightOutlined,
+  FileOutlined, EyeOutlined
 } from '@ant-design/icons';
 import type { UploadFile } from 'antd/es/upload/interface';
 import api from '../../services/api';
 
 const { Content } = Layout;
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 const { TextArea } = Input;
 const { Dragger } = Upload;
 
@@ -103,24 +104,46 @@ const VerificationPage: React.FC = () => {
     }
   };
 
-  // 3. 点击引用跳转 PDF
-  const handleCitationClick = (citation: any) => {
-    let targetUrl = '';
-    if (citation.url) {
-      targetUrl = citation.url.startsWith('http') ? citation.url : `${API_BASE_URL}${citation.url}`;
-    } else if (citation.download_url) {
-      const baseUrl = citation.download_url.startsWith('http') ? citation.download_url : `${API_BASE_URL}${citation.download_url}`;
-      targetUrl = `${baseUrl}#page=${citation.page || 1}`;
-    }
-
-    if (targetUrl) {
+  // 3. 点击引用跳转 (与 ChatPage 逻辑一致)
+  const handleCitationClick = (cit: any) => {
+    if (cit.url) {
+      const targetUrl = cit.url.startsWith('http') ? cit.url : `${API_BASE_URL}${cit.url}`;
       window.open(targetUrl, '_blank');
+      return;
+    }
+    if (cit.download_url) {
+        const targetUrl = cit.download_url.startsWith('http') ? cit.download_url : `${API_BASE_URL}${cit.download_url}`;
+        window.open(`${targetUrl}#page=${cit.page || 1}`, '_blank');
+        return;
+    }
+    if (cit.doc_id) {
+        const fallbackUrl = `${API_BASE_URL}/api/v1/documents/${cit.doc_id}/preview#page=${cit.page || 1}`;
+        window.open(fallbackUrl, '_blank');
     } else {
-      message.warning('无法预览该文档 (缺少 URL)');
+        message.warning('无法打开该引用文档');
     }
   };
 
-  // 4. 渲染结果区域
+  // 4. 查看原始内容 (新窗口打开)
+  const handleViewOriginalContent = (content: string) => {
+    if (!content) return;
+    const newWindow = window.open('', '_blank');
+    if (newWindow) {
+        newWindow.document.write(`
+            <html>
+                <head><title>Original Content - TrustFlow</title></head>
+                <body style="padding: 20px; font-family: sans-serif; line-height: 1.6; background-color: #f9f9f9;">
+                    <h2>Original Content Viewer</h2>
+                    <hr/>
+                    <pre style="white-space: pre-wrap; background: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">${content}</pre>
+                </body>
+            </html>
+        `);
+        newWindow.document.close();
+    }
+  };
+
+  // 5. 渲染结果区域
   const renderVerificationResult = () => {
     if (!resultData) return null;
 
@@ -128,12 +151,14 @@ const VerificationPage: React.FC = () => {
     const matched_record = resultData.matched_record;
     const original_record = resultData.original_record;
     
+    // 优先使用 matched_record，其次 original_record，最后是 resultData 本身
+    const record = matched_record || original_record || resultData;
+    
     const citations = resultData.citations || matched_record?.citations || [];
     const dialog_chain = resultData.dialog_chain || matched_record?.dialog_chain || [];
     const blockchain_explorer_url = resultData.blockchain_explorer_url;
-    const record = matched_record || original_record || resultData;
 
-    // 构建时间轴数据：历史节点 + 当前节点
+    // 构建时间轴数据
     const timelineItems = (dialog_chain || []).map((item: any, i: number) => ({
       color: 'gray',
       dot: <ClockCircleOutlined style={{ fontSize: '16px' }} />,
@@ -155,7 +180,6 @@ const VerificationPage: React.FC = () => {
       )
     }));
 
-    // 如果有当前记录，将其追加到时间轴末尾并高亮
     if (record && record.tx_hash) {
       timelineItems.push({
         color: PRIMARY_COLOR,
@@ -243,11 +267,15 @@ const VerificationPage: React.FC = () => {
                 )}
             </Card>
 
-            {/* C. 存证元数据 */}
+            {/* C. 存证元数据 (新增：模型名称) */}
             <Card size="small" title="链上元数据" bordered={false} style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.05)', borderRadius: 12 }}>
                 {status === 'success' && record ? (
                     <Descriptions column={1} size="small">
                       <Descriptions.Item label="Record ID">{record.record_id}</Descriptions.Item>
+                      {/* 新增：模型名称 */}
+                      <Descriptions.Item label="AI Model">
+                          <Tag color="geekblue">{record.model_name || 'Unknown'}</Tag>
+                      </Descriptions.Item>
                       <Descriptions.Item label="Timestamp">{record.created_at ? new Date(record.created_at).toLocaleDateString() : '-'}</Descriptions.Item>
                       {blockchain_explorer_url && (
                         <Descriptions.Item label="Explorer">
@@ -260,6 +288,35 @@ const VerificationPage: React.FC = () => {
                 ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
             </Card>
         </div>
+        
+        {/* 新增：文本内容详情 (仅在有 matched_record 且为文本相关验证时显示) */}
+        {record && (verification_type === 'semantic_similarity' || record.original_content || record.content_preview) && (
+            <Card size="small" title="内容验证详情" bordered={false} style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.05)', borderRadius: 12, marginBottom: 24 }}>
+                <Descriptions column={1} layout="vertical" bordered>
+                    <Descriptions.Item label="Content Preview (摘要)">
+                        <div style={{ maxHeight: 100, overflowY: 'auto', color: '#555', fontSize: 13 }}>
+                            {record.content_preview || "暂无预览"}
+                        </div>
+                    </Descriptions.Item>
+                    {record.original_content && (
+                        <Descriptions.Item label="Original Content (完整内容)">
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <Text type="secondary">点击查看完整的区块链原始存证内容</Text>
+                                <Button 
+                                    type="primary" 
+                                    ghost 
+                                    size="small" 
+                                    icon={<EyeOutlined />} 
+                                    onClick={() => handleViewOriginalContent(record.original_content)}
+                                >
+                                    View Full Content
+                                </Button>
+                            </div>
+                        </Descriptions.Item>
+                    )}
+                </Descriptions>
+            </Card>
+        )}
 
         {/* D. 引用与溯源 */}
         {(citations.length > 0 || timelineItems.length > 0) && (
@@ -268,44 +325,97 @@ const VerificationPage: React.FC = () => {
                   citations.length > 0 ? {
                       key: 'cite',
                       label: <span><ReadOutlined /> 证据来源 ({citations.length})</span>,
+                      // 修改：使用与 ChatPage 一致的引用卡片样式
                       children: (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '10px 0' }}>
-                            {citations.map((c: any, i: number) => (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 0' }}>
+                            {citations.map((cit: any, cIdx: number) => (
                                 <div 
-                                    key={i} 
-                                    onClick={() => handleCitationClick(c)}
+                                    key={cIdx} 
+                                    onClick={() => handleCitationClick(cit)}
                                     style={{
                                         backgroundColor: '#fff',
                                         borderRadius: '8px',
-                                        padding: '12px 16px',
+                                        padding: '10px 12px',
                                         cursor: 'pointer',
-                                        border: '1px solid #eef0f2',
+                                        border: '1px solid #e6e6e6',
                                         transition: 'all 0.2s',
-                                        boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
+                                        boxShadow: '0 1px 2px rgba(0,0,0,0.02)'
                                     }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = PRIMARY_COLOR; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 163, 127, 0.1)'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#eef0f2'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.02)'; }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = PRIMARY_COLOR; e.currentTarget.style.boxShadow = '0 2px 8px rgba(16, 163, 127, 0.1)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#e6e6e6'; e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.02)'; }}
                                 >
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <FileTextOutlined style={{ color: '#1677ff', fontSize: 16 }} />
-                                            <Text strong style={{ fontSize: 14, color: '#333' }}>{c.file_name}</Text>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                                            <FileTextOutlined style={{ color: '#1677ff', fontSize: 14 }} />
+                                            <Text ellipsis style={{ fontWeight: 500, fontSize: 13, color: '#333', maxWidth: 220 }}>
+                                                {cit.file_name}
+                                            </Text>
                                         </div>
-                                        <Tag color="cyan">Match: {Math.round(c.score * 100)}%</Tag>
+                                        {cit.score && (
+                                            <Tag color="cyan" style={{ margin: 0, fontSize: 10, lineHeight: '16px', border: 'none' }}>
+                                                Match: {(cit.score * 100).toFixed(0)}%
+                                            </Tag>
+                                        )}
                                     </div>
                                     
+                                    {/* 摘要片段 */}
                                     <div style={{ 
-                                        fontSize: 13, color: '#666', lineHeight: '1.6', 
-                                        background: '#fafafa', padding: '8px', borderRadius: 6, marginBottom: 8,
-                                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden'
+                                        fontSize: 12, 
+                                        color: '#666', 
+                                        lineHeight: '1.5',
+                                        marginBottom: 8,
+                                        display: '-webkit-box',
+                                        WebkitLineClamp: 2,
+                                        WebkitBoxOrient: 'vertical',
+                                        overflow: 'hidden',
+                                        background: '#fafafa',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px'
                                     }}>
-                                        {c.text_snippet || "暂无摘要..."}
+                                        {cit.content_snippet || cit.text_snippet || "暂无摘要内容..."}
                                     </div>
 
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: '#999' }}>
-                                        <span>Page {c.page || 'N/A'}</span>
-                                        <span style={{ display: 'flex', alignItems: 'center', color: PRIMARY_COLOR, gap: 4 }}>
-                                            View Document <LinkOutlined />
+                                    {/* 区块链存证 Hash 信息 (ChatPage 风格) */}
+                                    {(cit.file_hash || cit.chunk_hash) && (
+                                        <div style={{ 
+                                            marginBottom: 8, 
+                                            paddingTop: 8,
+                                            borderTop: '1px dashed #eee',
+                                            fontSize: 10, 
+                                            fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace',
+                                            color: '#888'
+                                        }}>
+                                            {cit.file_hash && (
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                        <KeyOutlined style={{ fontSize: 10 }}/> File Hash:
+                                                    </span>
+                                                    <Tooltip title={cit.file_hash} overlayStyle={{ maxWidth: 400 }}>
+                                                        <span style={{ color: '#aaa', cursor: 'text' }}>
+                                                            {cit.file_hash.substring(0, 8)}...{cit.file_hash.substring(cit.file_hash.length - 6)}
+                                                        </span>
+                                                    </Tooltip>
+                                                </div>
+                                            )}
+                                            {cit.chunk_hash && (
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                        <SafetyCertificateOutlined style={{ fontSize: 10 }}/> Chunk Hash:
+                                                    </span>
+                                                    <Tooltip title={cit.chunk_hash} overlayStyle={{ maxWidth: 400 }}>
+                                                        <span style={{ color: '#aaa', cursor: 'text' }}>
+                                                            {cit.chunk_hash.substring(0, 8)}...{cit.chunk_hash.substring(cit.chunk_hash.length - 6)}
+                                                        </span>
+                                                    </Tooltip>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#999' }}>
+                                        <span>P.{cit.page || 'N/A'}</span>
+                                        <span style={{ display: 'flex', alignItems: 'center', color: PRIMARY_COLOR, gap: 2 }}>
+                                            查看详情 <LinkOutlined />
                                         </span>
                                     </div>
                                 </div>
@@ -315,7 +425,7 @@ const VerificationPage: React.FC = () => {
                   } : null,
                   timelineItems.length > 0 ? {
                       key: 'chain',
-                      label: <span><NodeIndexOutlined /> 全链路存证溯源</span>,
+                      label: <span><FileOutlined /> 全链路存证溯源</span>,
                       children: (
                           <div style={{ padding: '20px 10px' }}>
                              <Timeline items={timelineItems} />
